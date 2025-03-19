@@ -244,6 +244,37 @@ npm start
 
 应用将在 http://localhost:3000 运行。
 
+## GitHub部署
+
+本项目已配置好Git版本控制，并已排除不必要的文件和目录（如node_modules、日志、缓存等）。要将项目部署到GitHub：
+
+1. 在GitHub上创建一个新的仓库
+
+2. 关联本地仓库与远程仓库
+```bash
+git remote add origin https://github.com/yourusername/answerman.git
+```
+
+3. 推送代码到GitHub
+```bash
+git push -u origin main
+```
+
+4. 后续代码更新
+```bash
+git add .
+git commit -m "描述更新内容"
+git push
+```
+
+## 代码贡献
+
+1. Fork本仓库
+2. 创建你的功能分支 (`git checkout -b feature/amazing-feature`)
+3. 提交你的更改 (`git commit -m 'Add some amazing feature'`)
+4. 推送到分支 (`git push origin feature/amazing-feature`)
+5. 开启一个Pull Request
+
 ## 配置
 
 `answerman.config` 文件包含以下配置项：
