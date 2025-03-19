@@ -1,0 +1,36 @@
+{
+  "openai": {
+    "apiUrl": "https://api.openai.com/v1/chat/completions",
+    "model": "gpt-4",
+    "apiKey": ""
+  },
+  "lm_studio": {
+    "apiUrl": "http://127.0.0.1:1234/v1/chat/completions",
+    "model": "your-local-model-identifier",
+    "apiKey": "lm-studio"
+  },
+  "anthropic": {
+    "apiUrl": "https://api.anthropic.com/v1/complete",
+    "model": "claude-2",
+    "apiKey": ""
+  },
+  "volc_ark": {
+    "apiUrl": "https://ark.cn-beijing.volces.com/api/v3/chat/completions",
+    "model": "ep-20250208102341-sjk9f",
+    "apiKey": "394e7f95-c362-43e3-9adf-a2babaaf76d2"
+  },
+  "dashscope": {
+    "apiUrl": "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
+    "model": "qwen2.5-vl-72b-instruct",
+    "apiKey": "sk-ab28383c152140a294482e3bd3b69995"
+  },
+  "videoSettings": {
+    "autoSaveBookmarks": true,
+    "contextWindowSize": 15,
+    "maxHistory": 10
+  },
+  "storage": {
+    "cleanupIntervalDays": 7,
+    "maxVideoDuration": 7200
+  }
+}

@@ -1,0 +1,51 @@
+# 依赖目录
+node_modules/
+whisper-env/
+
+# 构建输出
+build/
+dist/
+
+# 环境变量和密钥
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# 日志
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+answerman-logs-*.json
+
+# 运行时数据和缓存
+model_cache/
+.app.pid
+.proxy.pid
+
+# 备份和存档
+src_backup/
+archived/
+
+# 临时文件
+*.tmp
+*.temp
+.DS_Store
+
+# 个人IDE配置
+.idea/
+.vscode/
+
+# 视频和多媒体文件（可能体积较大）
+*.mp4
+*.avi
+*.mov
+*.flv
+*.mp3
+*.wav
+
+# 项目特定
+Documents/ 

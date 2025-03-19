@@ -1,0 +1,255 @@
+/* 提示词设置覆盖层 */
+.prompt-settings-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: rgba(0, 0, 0, 0.5);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  z-index: 1000;
+}
+
+/* 提示词设置容器 */
+.prompt-settings-container {
+  background-color: white;
+  border-radius: 8px;
+  width: 80%;
+  max-width: 900px;
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
+  overflow: hidden;
+}
+
+/* 提示词设置头部 */
+.prompt-settings-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px 20px;
+  background-color: #f0f4f8;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.prompt-settings-header h2 {
+  margin: 0;
+  font-size: 18px;
+  color: #2d3748;
+}
+
+.close-btn {
+  background: none;
+  border: none;
+  font-size: 24px;
+  color: #4a5568;
+  cursor: pointer;
+  padding: 0;
+  line-height: 1;
+}
+
+.close-btn:hover {
+  color: #e53e3e;
+}
+
+/* 标签页导航 */
+.prompt-settings-tabs {
+  display: flex;
+  background-color: #edf2f7;
+  border-bottom: 1px solid #e2e8f0;
+  overflow-x: auto;
+}
+
+.prompt-settings-tabs button {
+  padding: 12px 16px;
+  background: none;
+  border: none;
+  font-size: 14px;
+  font-weight: 500;
+  color: #4a5568;
+  cursor: pointer;
+  white-space: nowrap;
+  border-bottom: 2px solid transparent;
+}
+
+.prompt-settings-tabs button:hover {
+  background-color: rgba(0, 0, 0, 0.05);
+}
+
+.prompt-settings-tabs button.active {
+  color: #3182ce;
+  border-bottom-color: #3182ce;
+  background-color: rgba(49, 130, 206, 0.05);
+}
+
+/* 内容区域 */
+.prompt-settings-content {
+  flex: 1;
+  padding: 20px;
+  overflow-y: auto;
+}
+
+.prompt-section {
+  margin-bottom: 20px;
+}
+
+.prompt-section label {
+  display: block;
+  font-weight: 600;
+  margin-bottom: 8px;
+  color: #2d3748;
+}
+
+.prompt-description {
+  font-size: 14px;
+  color: #718096;
+  margin-bottom: 12px;
+  line-height: 1.5;
+}
+
+.prompt-section textarea {
+  width: 100%;
+  padding: 12px;
+  border: 1px solid #e2e8f0;
+  border-radius: 4px;
+  font-size: 14px;
+  font-family: inherit;
+  line-height: 1.5;
+  resize: vertical;
+}
+
+.prompt-section textarea:focus {
+  outline: none;
+  border-color: #3182ce;
+  box-shadow: 0 0 0 3px rgba(49, 130, 206, 0.15);
+}
+
+/* 提示词预览 */
+.prompt-preview {
+  background-color: #f7fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 4px;
+  padding: 16px;
+  font-family: monospace;
+  font-size: 14px;
+  white-space: pre-wrap;
+  line-height: 1.5;
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+/* 操作按钮区域 */
+.prompt-settings-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+  padding: 16px 20px;
+  background-color: #f7fafc;
+  border-top: 1px solid #e2e8f0;
+}
+
+.prompt-settings-actions button {
+  padding: 8px 16px;
+  border-radius: 4px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.reset-btn {
+  background-color: #fff;
+  color: #4a5568;
+  border: 1px solid #cbd5e0;
+}
+
+.reset-btn:hover {
+  background-color: #f1f5f9;
+}
+
+.save-btn {
+  background-color: #3182ce;
+  color: white;
+  border: 1px solid #2b6cb0;
+}
+
+.save-btn:hover {
+  background-color: #2b6cb0;
+}
+
+/* 新增变量设置相关样式 */
+.variable-group {
+  display: flex;
+  gap: 15px;
+  margin-bottom: 15px;
+}
+
+.variable-field {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
+.variable-field label {
+  font-weight: 600;
+  margin-bottom: 5px;
+  color: #2d3748;
+  font-size: 14px;
+}
+
+.variable-field select,
+.variable-field input {
+  padding: 8px 10px;
+  border: 1px solid #e2e8f0;
+  border-radius: 4px;
+  font-size: 14px;
+  height: 40px;
+}
+
+.variable-field select:focus,
+.variable-field input:focus {
+  outline: none;
+  border-color: #3182ce;
+  box-shadow: 0 0 0 2px rgba(49, 130, 206, 0.15);
+}
+
+.variables-help {
+  margin-top: 20px;
+  padding: 12px;
+  background-color: #f8fafc;
+  border-radius: 4px;
+  border-left: 3px solid #4299e1;
+}
+
+.variables-help p {
+  font-weight: 600;
+  margin-bottom: 8px;
+  color: #2d3748;
+}
+
+.variables-help ul {
+  margin: 0;
+  padding-left: 20px;
+  font-size: 14px;
+  color: #4a5568;
+  line-height: 1.6;
+}
+
+/* 响应式设计 */
+@media (max-width: 768px) {
+  .prompt-settings-container {
+    width: 95%;
+    max-width: none;
+  }
+  
+  .prompt-settings-tabs button {
+    padding: 10px;
+  }
+
+  .variable-group {
+    flex-direction: column;
+    gap: 10px;
+  }
+} 
