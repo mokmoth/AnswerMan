@@ -4,11 +4,12 @@
  */
 
 import axios from 'axios';
+import logCollector from '../utils/LogCollector';
 
 // API端点
 const API_ENDPOINTS = {
-  // 兼容OpenAI格式的接口
-  COMPATIBLE: 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions',
+  // 兼容OpenAI格式的接口 - 修正为文档中的正确地址
+  COMPATIBLE: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
   // 纯文本生成接口
   TEXT: 'https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation',
   // 多模态生成接口
@@ -55,25 +56,34 @@ class QwenAIService {
 
   /**
    * 初始化服务
-   * @param {Object} options 配置选项
-   * @returns {boolean} 初始化结果
+   * @param {Object} options 初始化选项
+   * @returns {boolean} 是否初始化成功
    */
   init(options = {}) {
     try {
-      this.apiKey = options.apiKey;
+      this.apiKey = options.apiKey || process.env.REACT_APP_DASHSCOPE_API_KEY;
+      
       if (!this.apiKey) {
-        console.error('通义千问API服务初始化失败: 未提供API密钥');
+        console.error('通义千问API初始化失败: 缺少API密钥');
         return false;
       }
-
-      this.defaultModel = options.defaultModel || this.defaultModel;
-      this.useCompatibleMode = options.useCompatibleMode || this.useCompatibleMode;
-      this.systemPrompt = options.systemPrompt || this.systemPrompt;
       
-      console.log(`通义千问API服务初始化成功，使用${this.useCompatibleMode ? 'OpenAI兼容' : '标准'}模式`);
+      // 默认使用兼容模式，因为Omni模型需要OpenAI兼容模式调用
+      this.useCompatibleMode = true;
+      
+      if (options.defaultModel) {
+        this.defaultModel = options.defaultModel;
+      }
+      
+      if (options.systemPrompt) {
+        this.systemPrompt = options.systemPrompt;
+      }
+      
+      const isOmni = this.isOmniModel(this.defaultModel);
+      console.log(`通义千问API服务初始化成功，使用${this.useCompatibleMode ? '标准' : '原生'}模式${isOmni ? '，Omni模型' : ''}`);
       return true;
     } catch (error) {
-      console.error('通义千问API服务初始化失败:', error);
+      console.error('通义千问API初始化失败:', error);
       return false;
     }
   }
@@ -273,119 +283,394 @@ class QwenAIService {
   }
 
   /**
-   * 向API发送聊天请求
-   * @param {Array} messages 消息数组
-   * @param {Object} options 请求选项
-   * @returns {Promise<Object>} API响应
+   * 发送聊天请求
+   * @param {string} message - 用户消息
+   * @param {Object} options - 请求选项
+   * @param {boolean} options.stream - 是否使用流式输出
+   * @param {Function} options.onUpdate - 流式输出回调函数
+   * @param {string} options.systemPrompt - 系统提示词
+   * @param {boolean} options.enableLog - 是否记录日志，默认为true
+   * @returns {Promise<string>} 返回聊天结果
    */
-  async sendChatRequest(messages, options = {}) {
-    const model = options.model || this.defaultModel;
-    const stream = options.stream || false;
-    const isOmni = this.isOmniModel(model);
-    
-    // 对于Omni模型，强制设置为流式输出
-    const forceStream = isOmni ? true : stream;
-    
+  async sendChatRequest(message, { stream = false, onUpdate = null, systemPrompt = null, enableLog = true } = {}) {
+    // 确认API密钥存在
+    if (!this.apiKey) {
+      const error = new Error('缺少API密钥');
+      if (enableLog) {
+        logCollector.addLog({
+          service: 'qwen',
+          model: 'qwen-max',
+          type: 'error',
+          error: error,
+          timestamp: new Date()
+        });
+      }
+      throw error;
+    }
+
+    const useProxy = true; // 是否使用代理
+    const proxyUrl = process.env.REACT_APP_PROXY_URL || 'http://localhost:8767/proxy'; // 代理服务器URL
+
+    let apiUrl;
+    let requestData;
+
+    // 根据兼容模式和消息类型选择API
+    if (this.useCompatibleMode === 'omni' || typeof message !== 'string') {
+      // 通过代理访问Omni模式的API
+      const targetUrl = 'https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation';
+      apiUrl = useProxy ? proxyUrl : targetUrl;
+
+      // 构建请求数据
+      requestData = {
+        model: this.defaultModel,
+        input: {
+          messages: typeof message === 'string' ? [{
+            role: 'user',
+            content: message
+          }] : message
+        },
+        parameters: {
+          result_format: "message",
+          output_modality: "text",
+          temperature: 0.7,
+          top_p: 0.95,
+          top_k: 50
+        },
+        stream: stream
+      };
+
+      // 如果有指定系统提示，添加到消息列表开头
+      if (systemPrompt) {
+        if (typeof message === 'string') {
+          requestData.input.messages.unshift({
+            role: 'system',
+            content: systemPrompt
+          });
+        } else if (Array.isArray(message) && !message.find(msg => msg.role === 'system')) {
+          requestData.input.messages.unshift({
+            role: 'system',
+            content: systemPrompt
+          });
+        }
+      }
+    } else {
+      // 兼容模式API
+      const targetUrl = 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions';
+      apiUrl = useProxy ? proxyUrl : targetUrl;
+
+      // 构建请求数据
+      requestData = {
+        model: this.defaultModel,
+        messages: typeof message === 'string' ? [{
+          role: 'user',
+          content: message
+        }] : message,
+        temperature: 0.7,
+        top_p: 0.95,
+        stream: stream,
+        modalities: ["text"] // 添加输出模态为文本
+      };
+
+      // 如果有指定系统提示，添加到消息列表开头
+      if (systemPrompt) {
+        if (typeof message === 'string') {
+          requestData.messages.unshift({
+            role: 'system',
+            content: systemPrompt
+          });
+        } else if (Array.isArray(message) && !message.find(msg => msg.role === 'system')) {
+          requestData.messages.unshift({
+            role: 'system',
+            content: systemPrompt
+          });
+        }
+      }
+    }
+
+    // 设置请求配置
+    const requestConfig = {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${this.apiKey}`
+      }
+    };
+
+    // 根据环境决定流式输出处理方式
+    if (stream) {
+      if (typeof window === 'undefined') {
+        // Node.js环境
+        requestConfig.responseType = 'stream';
+      } else {
+        // 浏览器环境
+        requestConfig.responseType = 'text';
+      }
+    }
+
+    // 记录请求日志
+    let requestLogId = null;
+    if (enableLog) {
+      requestLogId = logCollector.addLog({
+        service: 'qwen',
+        model: this.defaultModel,
+        type: 'request',
+        request: {
+          url: apiUrl,
+          method: 'POST',
+          headers: requestConfig.headers,
+          data: requestData
+        },
+        messages: requestData.messages || requestData.input?.messages,
+        timestamp: new Date()
+      });
+    }
+
     try {
-      const apiUrl = this.useCompatibleMode ? API_ENDPOINTS.COMPATIBLE : (
-        this.isMultiModalChat(messages) ? API_ENDPOINTS.MULTIMODAL : API_ENDPOINTS.TEXT
-      );
-      
-      let requestData;
-      
-      if (this.useCompatibleMode) {
-        // OpenAI兼容模式
-        requestData = {
-          model,
-          messages,
-          temperature: options.temperature || 0.7,
-          top_p: options.topP || 0.8,
-          stream: forceStream
-        };
-        
-        // 对于Omni模型，需要设置输出模态
-        if (isOmni) {
-          requestData.modalities = ["text"]; // Omni模型当前仅支持text输出
+      let result = '';
+
+      // 发送请求
+      if (stream) {
+        if (useProxy) {
+          // 使用代理发送流式请求
+          // 根据请求类型构建不同的代理请求数据
+          let proxyRequestData;
+          
+          // 检查是否包含视频帧分析数据
+          const isVideoAnalysis = Array.isArray(message) && message.length > 1 && 
+            message[1]?.role === 'user' && Array.isArray(message[1]?.content) &&
+            message[1]?.content.some(item => item.type === 'video');
+          
+          if (isVideoAnalysis) {
+            // 视频分析请求 - 使用兼容模式API
+            proxyRequestData = {
+              url: 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions',
+              data: {
+                model: this.defaultModel,
+                messages: message,
+                stream: true,
+                temperature: 0.7,
+                top_p: 0.95,
+                modalities: ["text"]
+              },
+              headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${this.apiKey}`
+              }
+            };
+            console.log('发送视频分析兼容模式请求');
+          } else {
+            // 常规请求
+            proxyRequestData = {
+              url: this.useCompatibleMode === 'omni' ? 
+                'https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation' : 
+                'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions',
+              data: requestData,
+              headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${this.apiKey}`
+              },
+              stream: true // 确保代理知道这是流式请求
+            };
+          }
+
+          const response = await fetch(proxyUrl, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(proxyRequestData)
+          });
+
+          if (!response.ok) {
+            const errorData = await response.json().catch(() => ({}));
+            const error = new Error(`API请求失败: ${response.status} ${response.statusText}`);
+            error.response = { status: response.status, data: errorData };
+            
+            // 记录错误日志
+            if (enableLog && requestLogId) {
+              logCollector.updateLog(requestLogId, {
+                type: 'error',
+                error: error,
+                response: {
+                  status: response.status,
+                  headers: Object.fromEntries(response.headers.entries()),
+                  data: errorData
+                },
+                timestamp: new Date()
+              });
+            }
+            
+            throw error;
+          }
+
+          // 记录响应日志
+          if (enableLog && requestLogId) {
+            logCollector.updateLog(requestLogId, {
+              type: 'response',
+              response: {
+                status: response.status,
+                headers: Object.fromEntries(response.headers.entries())
+              },
+              timestamp: new Date()
+            });
+          }
+
+          const reader = response.body.getReader();
+          const decoder = new TextDecoder('utf-8');
+          let fullContent = '';
+          let pendingText = '';
+          
+          // 流式处理响应
+          while (true) {
+            const {done, value} = await reader.read();
+            if (done) break;
+            
+            const chunk = decoder.decode(value, {stream: true});
+            pendingText += chunk;
+            
+            // 处理流式响应，确保每行是完整的
+            const lines = pendingText.split('\n');
+            // 最后一行可能不完整，保留到下一次处理
+            pendingText = lines.pop() || '';
+            
+            for (const line of lines) {
+              if (!line.trim() || line.includes('data: [DONE]')) continue;
+              
+              try {
+                // 提取JSON数据
+                if (!line.startsWith('data:')) continue;
+                
+                const jsonData = line.replace(/^data: /, '').trim();
+                if (!jsonData) continue;
+                
+                const data = JSON.parse(jsonData);
+                if (data.choices && data.choices.length > 0) {
+                  const content = data.choices[0].delta?.content || data.choices[0].message?.content || '';
+                  if (content) {
+                    fullContent += content;
+                    if (onUpdate) {
+                      // 将完整内容作为context.fullText传递，避免前端重复累加
+                      onUpdate(content, { fullText: fullContent });
+                    }
+                  }
+                }
+              } catch (e) {
+                console.warn('解析流数据失败:', e, line);
+              }
+            }
+          }
+          
+          // 处理剩余的未处理文本
+          if (pendingText.trim()) {
+            try {
+              if (pendingText.startsWith('data:')) {
+                const jsonData = pendingText.replace(/^data: /, '').trim();
+                if (jsonData && !jsonData.includes('[DONE]')) {
+                  const data = JSON.parse(jsonData);
+                  if (data.choices && data.choices.length > 0) {
+                    const content = data.choices[0].delta?.content || data.choices[0].message?.content || '';
+                    if (content) {
+                      fullContent += content;
+                      if (onUpdate) {
+                        // 将完整内容作为context.fullText传递
+                        onUpdate(content, { fullText: fullContent });
+                      }
+                    }
+                  }
+                }
+              }
+            } catch (e) {
+              console.warn('解析最后一行数据失败:', e);
+            }
+          }
+          
+          // 标记流式响应完成
+          if (onUpdate) {
+            onUpdate('', { done: true, fullText: fullContent });
+          }
+          
+          result = fullContent;
+        } else {
+          throw new Error('非代理模式下不支持流式请求');
         }
       } else {
-        // 原生模式
-        requestData = {
-          model,
-          input: {
-            messages
-          },
-          parameters: {
-            temperature: options.temperature || 0.7,
-            top_p: options.topP || 0.8,
-            result_format: 'message'
-          }
-        };
+        // 非流式请求
+        let response;
         
-        // 如果是流式输出
-        if (forceStream) {
-          requestData.parameters.incremental_output = true;
-        }
-      }
-      
-      const requestConfig = {
-        headers: {
-          'Authorization': `Bearer ${this.apiKey}`,
-          'Content-Type': 'application/json'
-        }
-      };
-      
-      // 设置流式输出
-      if (forceStream) {
-        if (!this.useCompatibleMode) {
-          requestConfig.headers['X-DashScope-SSE'] = 'enable';
-        }
-        // 浏览器环境不支持stream responseType
-        if (typeof window === 'undefined') {
-          // 仅在Node.js环境下设置
-          requestConfig.responseType = 'stream';
+        if (useProxy) {
+          // 使用代理
+          response = await axios.post(apiUrl, requestData, { headers: requestConfig.headers });
         } else {
-          // 浏览器环境禁用流式输出，直接返回普通响应
-          // 但将API设置为请求流式输出
-          if (this.useCompatibleMode) {
-            // 在兼容模式中保留stream参数
-            if (requestData.stream !== undefined) {
-              requestData.stream = true;
-            }
-          } else {
-            // 在原生模式中设置incremental_output
-            if (requestData.parameters) {
-              requestData.parameters.incremental_output = true;
-            }
+          // 直接请求API
+          response = await axios.request({
+            url: apiUrl,
+            ...requestConfig,
+            data: requestData
+          });
+        }
+        
+        // 记录响应日志
+        if (enableLog && requestLogId) {
+          logCollector.updateLog(requestLogId, {
+            type: 'response',
+            response: {
+              status: response.status,
+              headers: response.headers,
+              data: response.data
+            },
+            timestamp: new Date()
+          });
+        }
+        
+        // 从响应中提取内容
+        if (this.useCompatibleMode === 'omni') {
+          if (response.data.output && response.data.output.choices && response.data.output.choices.length > 0) {
+            result = response.data.output.choices[0].message.content;
+          }
+        } else {
+          if (response.data.choices && response.data.choices.length > 0) {
+            result = response.data.choices[0].message.content;
           }
         }
+        
+        // 更新日志
+        if (enableLog && requestLogId) {
+          logCollector.updateLog(requestLogId, {
+            result: result,
+            timestamp: new Date()
+          });
+        }
+      }
+
+      return result;
+    } catch (error) {
+      console.error('通义API请求失败:', error);
+      
+      // 记录错误日志
+      if (enableLog) {
+        if (requestLogId) {
+          logCollector.updateLog(requestLogId, {
+            type: 'error',
+            error: error,
+            timestamp: new Date()
+          });
+        } else {
+          logCollector.addLog({
+            service: 'qwen',
+            model: this.defaultModel,
+            type: 'error',
+            error: error,
+            request: {
+              url: apiUrl,
+              method: 'POST',
+              data: requestData
+            },
+            timestamp: new Date()
+          });
+        }
       }
       
-      const response = await axios.post(apiUrl, requestData, requestConfig);
-      
-      return response;
-    } catch (error) {
-      this.handleApiError(error);
-    }
-  }
-
-  /**
-   * 处理API错误
-   * @param {Error} error 错误对象
-   */
-  handleApiError(error) {
-    if (error.response) {
-      // API返回错误响应
-      console.error('通义千问API错误:', {
-        status: error.response.status,
-        data: error.response.data
-      });
-      throw new Error(`API错误 (${error.response.status}): ${error.response.data.error?.message || '未知错误'}`);
-    } else if (error.request) {
-      // 请求发出但没有收到响应
-      throw new Error('未收到API响应，请检查网络连接');
-    } else {
-      // 请求设置时出错
-      throw new Error(`请求错误: ${error.message}`);
+      throw error;
     }
   }
 
@@ -418,418 +703,223 @@ class QwenAIService {
    * @returns {string} 提取的文本
    */
   extractTextFromResponse(response) {
-    if (this.useCompatibleMode) {
-      // 兼容模式响应格式
-      if (response.data.choices && 
-          response.data.choices.length > 0 &&
-          response.data.choices[0].message) {
-        // 处理不同的消息格式
-        const message = response.data.choices[0].message;
-        if (typeof message.content === 'string') {
-          return message.content;
-        } else if (Array.isArray(message.content)) {
-          // 找到文本部分
-          for (const item of message.content) {
-            if (item.type === 'text') {
-              return item.text;
-            }
-          }
-        }
-      }
-    } else {
-      // 原生模式响应格式
-      if (response.data.output && 
-          response.data.output.choices && 
-          response.data.output.choices.length > 0) {
-        const choice = response.data.output.choices[0];
-        if (choice.message) {
-          if (Array.isArray(choice.message.content)) {
-            // 多模态响应
-            for (const item of choice.message.content) {
-              if (item.text) {
-                return item.text;
-              }
-            }
-          } else if (choice.message.content) {
-            // 文本响应
-            return choice.message.content;
-          }
-        }
-      }
+    if (!response) {
+      throw new Error('无效的响应对象');
     }
-    
-    throw new Error('无法从API响应中提取回答');
-  }
-
-  /**
-   * 使用图片列表形式调用视频理解功能
-   * @param {Array<string>} frameList - base64图片数组
-   * @param {string} prompt - 用户提问
-   * @param {Object} options - 配置项
-   * @returns {Promise<Object>} 返回AI回复
-   */
-  async understandVideoFrames(frameList, prompt, options = {}) {
-    if (!frameList || !Array.isArray(frameList) || frameList.length < 4) {
-      throw new Error('至少需要提供4个视频帧');
-    }
-    
-    console.log(`准备视频帧分析，共 ${frameList.length} 帧，当前模型: ${options.model || this.defaultModel}`);
-    
-    const model = options.model || this.defaultModel;
-    let systemPrompt = options.systemPrompt || '你是一个视频分析助手，请分析视频内容并回答问题。';
-    const useHistory = options.useHistory !== false;
-    // 总是设置流式输出为true，因为Omni模型需要
-    const stream = true;
-    const onChunk = options.onChunk;
-    
-    // 处理字幕，如果有的话
-    if (options.includeSubtitles && this.subtitles && this.subtitles.length > 0) {
-      const subtitleText = this.createSubtitleText(this.subtitles);
-      // 在系统提示中加入字幕信息
-      systemPrompt += `\n\n${subtitleText}`;
-      console.log(`包含${this.subtitles.length}条字幕`);
-    }
-    
-    // 处理当前视频时间信息
-    if (options.videoTime !== undefined) {
-      const videoTimeFormatted = this.formatTime(options.videoTime);
-      console.log(`当前视频时间: ${videoTimeFormatted}`);
-      
-      // 如果有上下文信息，处理当前时间点附近的字幕
-      if (options.context && options.context.currentSubtitles && options.context.currentSubtitles.length > 0) {
-        const currentSubtitles = options.context.currentSubtitles;
-        systemPrompt += `\n\n当前视频时间: ${videoTimeFormatted}\n当前时间点附近的字幕内容:\n`;
-        
-        for (const sub of currentSubtitles) {
-          const startTimeFormatted = this.formatTime(sub.startTime);
-          systemPrompt += `[${startTimeFormatted}] ${sub.text}\n`;
-        }
-        
-        console.log(`包含当前时间(${videoTimeFormatted})附近的${currentSubtitles.length}条字幕`);
-      }
-    }
-    
-    // 创建消息历史
-    const messages = [];
-    
-    // 添加系统提示
-    if (systemPrompt) {
-      console.log('添加系统提示:', systemPrompt);
-      messages.push(this.createSystemMessage(systemPrompt));
-    }
-    
-    // 从历史中添加消息
-    if (useHistory && this.chatHistory.length > 0) {
-      console.log(`添加历史消息 (${this.chatHistory.length}条)`);
-      messages.push(...this.chatHistory);
-    }
-    
-    // 构建用户消息(包含多张图片和文本)
-    let userMessage;
     
     try {
       if (this.useCompatibleMode) {
-        // OpenAI兼容模式下使用视频类型
-        console.log('使用OpenAI兼容模式创建视频帧消息');
-        const videoUrls = frameList.map(frame => {
-          // 如果已经是data:开头的URL，直接使用，否则添加前缀
-          return frame.startsWith('data:') ? frame : `data:image/jpeg;base64,${frame}`;
-        });
-        
-        const content = [
-          {
-            type: 'video',
-            video: videoUrls
-          },
-          {
-            type: 'text',
-            text: prompt
-          }
-        ];
-        
-        userMessage = { role: 'user', content };
-        console.log(`成功创建视频消息，包含 ${videoUrls.length} 个帧`);
-      } else {
-        // 原生模式下直接使用images数组
-        userMessage = {
-          role: 'user',
-          content: {
-            video: frameList,
-            text: prompt
-          }
-        };
-      }
-      
-      // 添加用户消息到会话
-      messages.push(userMessage);
-      
-      console.log(`发送视频理解请求，模型: ${model}, 流式输出: ${stream}`);
-      
-      // 手动收集流式响应的内容
-      let fullContent = '';
-      
-      // 处理流式响应的回调函数
-      const handleStreamChunk = (chunk) => {
-        if (chunk && chunk.choices && chunk.choices.length > 0) {
-          const delta = chunk.choices[0].delta;
-          if (delta && delta.content) {
-            fullContent += delta.content;
-            if (onChunk) {
-              // 直接传递文本内容
-              onChunk(delta.content);
+        // 兼容模式响应格式
+        if (response.choices && 
+            response.choices.length > 0 &&
+            response.choices[0].message) {
+          // 处理不同的消息格式
+          const message = response.choices[0].message;
+          if (typeof message.content === 'string') {
+            return message.content;
+          } else if (Array.isArray(message.content)) {
+            // 找到文本部分
+            for (const item of message.content) {
+              if (item.type === 'text') {
+                return item.text;
+              }
             }
           }
-        } else if (typeof chunk === 'string') {
-          // 如果chunk已经是字符串，直接使用
-          fullContent += chunk;
-          if (onChunk) {
-            onChunk(chunk);
+        }
+      } else {
+        // 原生模式响应格式
+        if (response.output && 
+            response.output.choices && 
+            response.output.choices.length > 0) {
+          const choice = response.output.choices[0];
+          if (choice.message) {
+            if (Array.isArray(choice.message.content)) {
+              // 多模态响应
+              for (const item of choice.message.content) {
+                if (item.text) {
+                  return item.text;
+                }
+              }
+            } else if (choice.message.content) {
+              // 文本响应
+              return choice.message.content;
+            }
           }
         }
+      }
+      
+      // 如果无法提取出文本，返回整个响应的字符串表示
+      console.warn('无法从响应中提取文本，返回原始响应');
+      return JSON.stringify(response);
+    } catch (error) {
+      console.error('提取响应文本时出错:', error);
+      throw new Error('无法从API响应中提取回答');
+    }
+  }
+
+  /**
+   * 使用通义千问Omni模型分析视频帧
+   * @param {Array} frameList 视频帧列表（Base64格式）
+   * @param {string} prompt 用户提示
+   * @param {Object} options 配置选项
+   * @returns {Promise<string>} 分析结果
+   */
+  async understandVideoFrames(frameList, prompt, options = {}) {
+    try {
+      console.log(`准备视频帧分析，共 ${frameList.length} 帧，当前模型: ${this.defaultModel}`);
+      
+      if (!this.isOmniModel(this.defaultModel)) {
+        throw new Error('视频帧分析需要使用Omni模型');
+      }
+      
+      // 对于通义千问Omni，必须使用兼容模式
+      const originalMode = this.useCompatibleMode;
+      this.useCompatibleMode = 'compatible'; // 强制使用兼容模式
+      
+      // 准备消息数组
+      const messages = [];
+      
+      // 添加系统提示
+      if (options.systemPrompt) {
+        messages.push(this.createSystemMessage(options.systemPrompt));
+      } else {
+        messages.push(this.createSystemMessage('你是视频理解助手，正在分析用户上传的视频。请根据视频内容回答用户问题。'));
+      }
+      
+      // 添加用户消息
+      const userMessage = {
+        role: 'user',
+        content: []
       };
       
-      // 发送请求
-      const response = await this.sendChatRequest(messages, {
-        model,
-        stream: true,
-        onChunk: handleStreamChunk
+      // 添加视频帧 - 使用文档中规定的格式
+      userMessage.content.push({
+        type: 'video',
+        video: frameList.map(frame => `data:image/jpeg;base64,${frame}`)
       });
       
-      // 处理流式响应数据
-      if (stream) {
-        // 原始响应可能是复杂对象，但我们已经收集了完整内容
-        if (!fullContent && response && response.data) {
-          // 尝试从响应数据提取文本
-          console.log('尝试从响应数据中提取文本', response.data);
-          
-          // 解析SSE格式的响应
-          const lines = response.data.split('\n\n');
-          for (const line of lines) {
-            if (line.startsWith('data:')) {
-              const dataContent = line.substring(5).trim();
-              if (dataContent === '[DONE]') {
-                // 流式响应结束标记，跳过解析
-                continue;
-              }
-              
-              try {
-                const jsonData = JSON.parse(dataContent);
-                if (jsonData.choices && jsonData.choices.length > 0) {
-                  const delta = jsonData.choices[0].delta;
-                  if (delta && delta.content) {
-                    fullContent += delta.content;
-                    if (onChunk) {
-                      onChunk(delta.content);
-                    }
-                  }
-                }
-              } catch (e) {
-                console.warn('解析数据块失败:', e, line);
-              }
-            }
-          }
-        }
+      // 添加文本提示
+      userMessage.content.push({
+        type: 'text',
+        text: prompt
+      });
+      
+      messages.push(userMessage);
+      
+      // 添加字幕如果有
+      if (this.subtitles && this.subtitles.length > 0) {
+        const subtitleText = this.createSubtitleText(this.subtitles);
+        
+        // 修改用户消息，在提示前添加字幕信息
+        userMessage.content[1].text = `${subtitleText}\n\n${prompt}`;
       }
       
-      // 打印提取的内容
-      console.log('从流式响应中提取的完整内容:', fullContent);
+      const streamOption = options.stream !== false;
       
-      // 创建助手消息
-      const assistantMessage = this.createAssistantMessage(fullContent || '无法解析视频内容');
+      // 发送请求
+      console.log(`发送视频理解请求，模型: ${this.defaultModel}, 流式输出: ${streamOption}`);
       
-      // 更新消息历史
-      if (useHistory) {
-        this.chatHistory.push(userMessage);
-        this.chatHistory.push(assistantMessage);
-      }
-      
-      return {
-        text: fullContent || '无法解析视频内容',
-        message: assistantMessage,
-        originalResponse: response.data
+      // 直接使用简化的请求格式，确保messages正确传递
+      const requestOptions = {
+        stream: streamOption,
+        onUpdate: options.onChunk,
+        systemPrompt: null, // 已在messages中包含
+        enableLog: true
       };
+      
+      const response = await this.sendChatRequest(messages, requestOptions);
+      
+      // 恢复原始兼容模式设置
+      this.useCompatibleMode = originalMode;
+      
+      return response;
     } catch (error) {
-      console.error('视频帧理解请求出错:', error);
-      
-      // 如果是API错误，尝试获取更详细的信息
-      if (error.response) {
-        console.error('API响应详情:', {
-          status: error.response.status,
-          statusText: error.response.statusText,
-          data: error.response.data
-        });
-      }
-      
+      console.log(' 视频帧理解请求出错:', error);
       throw error;
     }
   }
 
   /**
    * 处理流式响应
-   * @param {Object} response - 响应对象
-   * @param {Function} onChunk - 处理每个数据块的回调函数
-   * @param {boolean} isCompatibleMode - 是否为兼容模式
+   * @param {Object} response Axios响应对象
+   * @param {Function} onChunk 处理数据块的回调函数
    * @returns {Promise<string>} 完整的响应文本
    */
-  async handleStreamResponse(response, onChunk, isCompatibleMode = this.useCompatibleMode) {
+  async handleStreamResponse(response, onChunk) {
     if (!response || !response.data) {
-      return '';
+      console.error('无效的流式响应:', response);
+      throw new Error('无效的流式响应');
     }
-    
-    console.log('处理流式响应:', typeof response.data);
-    
+
     let fullContent = '';
     
     try {
-      // 浏览器环境下的处理
-      if (typeof window !== 'undefined') {
-        if (typeof response.data === 'string') {
-          // 如果是字符串，表示已经接收到了完整的响应（可能是SSE格式）
-          const lines = response.data.split('\n\n');
-          for (const line of lines) {
-            if (line.startsWith('data:')) {
-              const dataContent = line.substring(5).trim();
-              if (dataContent === '[DONE]') {
-                // 流式响应结束标记，跳过解析
-                continue;
-              }
+      // SSE格式的文本响应处理
+      if (typeof response.data === 'string') {
+        console.log('处理文本格式SSE响应');
+        const lines = response.data.split('\n\n');
+        
+        for (const line of lines) {
+          if (line.startsWith('data:')) {
+            const dataContent = line.substring(5).trim();
+            
+            if (dataContent === '[DONE]') {
+              continue; // 流结束标记
+            }
+            
+            try {
+              const jsonData = JSON.parse(dataContent);
               
-              try {
-                const jsonData = JSON.parse(dataContent);
-                if (jsonData.choices && jsonData.choices.length > 0) {
-                  // 兼容模式
-                  if (isCompatibleMode) {
-                    const delta = jsonData.choices[0].delta;
-                    if (delta && delta.content) {
-                      fullContent += delta.content;
-                      if (onChunk) onChunk(delta.content);
-                    }
-                  } 
-                  // 原生模式
-                  else {
-                    const text = jsonData.output?.text;
-                    if (text) {
-                      fullContent += text;
-                      if (onChunk) onChunk(text);
-                    }
-                  }
+              if (jsonData.choices && jsonData.choices.length > 0) {
+                const delta = jsonData.choices[0].delta;
+                
+                if (delta && delta.content) {
+                  fullContent += delta.content;
+                  onChunk(delta.content);
                 }
-              } catch (e) {
-                console.warn('解析SSE数据块失败:', e, line);
               }
+            } catch (e) {
+              console.warn('解析SSE数据块失败:', e);
             }
           }
-        } else {
-          console.warn('浏览器环境下预期字符串类型的响应，但收到:', typeof response.data);
         }
+      }
+      // 直接返回JSON对象
+      else if (typeof response.data === 'object') {
+        console.log('处理JSON对象响应');
         
-        return fullContent;
-      }
-      
-      // Node.js环境下的处理（流式响应）
-      if (response.data && typeof response.data.on === 'function') {
-        return new Promise((resolve, reject) => {
-          const dataChunks = [];
+        if (response.data.choices && response.data.choices.length > 0) {
+          const choice = response.data.choices[0];
           
-          response.data.on('data', (chunk) => {
-            try {
-              const lines = chunk.toString().split('\n\n');
-              for (const line of lines) {
-                if (line.startsWith('data:')) {
-                  const dataContent = line.substring(5).trim();
-                  if (dataContent === '[DONE]') {
-                    // 流式响应结束标记，跳过解析
-                    continue;
-                  }
-                  
-                  try {
-                    const jsonData = JSON.parse(dataContent);
-                    
-                    if (isCompatibleMode) {
-                      // 兼容模式
-                      if (jsonData.choices && jsonData.choices.length > 0) {
-                        const delta = jsonData.choices[0].delta;
-                        if (delta && delta.content) {
-                          fullContent += delta.content;
-                          if (onChunk) onChunk(delta.content);
-                        }
-                      }
-                    } else {
-                      // 原生模式
-                      const text = jsonData.output?.text;
-                      if (text) {
-                        fullContent += text;
-                        if (onChunk) onChunk(text);
-                      }
-                    }
-                  } catch (e) {
-                    console.warn('解析数据块失败:', e);
-                  }
-                }
-              }
-            } catch (error) {
-              console.error('处理数据块出错:', error);
-            }
+          if (choice.message && choice.message.content) {
+            let content = '';
             
-            dataChunks.push(chunk);
-          });
-          
-          response.data.on('end', () => {
-            if (!fullContent) {
-              // 如果通过解析流未提取到内容，尝试解析完整的响应
-              try {
-                const completeData = Buffer.concat(dataChunks).toString();
-                console.log('尝试解析完整响应:', completeData.substring(0, 200) + '...');
-                
-                const lines = completeData.split('\n\n');
-                for (const line of lines) {
-                  if (line.startsWith('data:')) {
-                    const dataContent = line.substring(5).trim();
-                    if (dataContent === '[DONE]') {
-                      // 流式响应结束标记，跳过解析
-                      continue;
-                    }
-                    
-                    try {
-                      const jsonData = JSON.parse(dataContent);
-                      if (isCompatibleMode) {
-                        if (jsonData.choices && jsonData.choices.length > 0) {
-                          const delta = jsonData.choices[0].delta;
-                          if (delta && delta.content) {
-                            fullContent += delta.content;
-                          }
-                        }
-                      } else {
-                        const text = jsonData.output?.text;
-                        if (text) {
-                          fullContent += text;
-                        }
-                      }
-                    } catch (e) {
-                      console.warn('解析完整响应数据块失败:', e);
-                    }
-                  }
+            if (typeof choice.message.content === 'string') {
+              content = choice.message.content;
+            } 
+            else if (Array.isArray(choice.message.content)) {
+              // 找到文本部分
+              for (const item of choice.message.content) {
+                if (item.type === 'text') {
+                  content = item.text;
+                  break;
                 }
-              } catch (finalError) {
-                console.error('解析完整响应失败:', finalError);
               }
             }
             
-            console.log('流式响应结束，完整内容:', fullContent);
-            resolve(fullContent);
-          });
-          
-          response.data.on('error', (error) => {
-            console.error('流式响应出错:', error);
-            reject(error);
-          });
-        });
+            if (content) {
+              fullContent = content;
+              onChunk(content);
+            }
+          }
+        }
       }
       
+      console.log(`流式处理完成，总内容长度: ${fullContent.length}`);
       return fullContent;
     } catch (error) {
-      console.error('处理流式响应出错:', error);
-      return fullContent;
+      console.error('处理流式响应时出错:', error);
+      throw new Error(`流处理错误: ${error.message}`);
     }
   }
 
@@ -1023,7 +1113,7 @@ class QwenAIService {
                         
                         if (onChunk) {
                           // 直接传递文本内容给回调函数
-                          onChunk(content);
+                          onChunk(content, { fullText: fullText });
                         }
                       }
                     }

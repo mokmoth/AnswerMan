@@ -1,7 +1,8 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { qwenAIService } from '../services/qwenai_service';
+import { aiChatService } from '../services/AIChatService';
 import './VideoUnderstanding.css';
 import PromptSettings from './PromptSettings/PromptSettings';
+import DebugPanel from './DebugPanel';
 
 /**
  * 视频理解组件
@@ -65,12 +66,18 @@ const VideoUnderstanding = () => {
   const [inputImage, setInputImage] = useState(null); // 保存用户输入的图片
   const [inputImageB64, setInputImageB64] = useState(null); // Base64格式的图片
 
+  // 添加模型信息状态
+  const [modelInfo, setModelInfo] = useState('通义千问');
+
+  // 新增调试面板状态
+  const [showDebugPanel, setShowDebugPanel] = useState(false);
+
   // 初始化API
   useEffect(() => {
     const apiKey = process.env.REACT_APP_DASHSCOPE_API_KEY;
     if (apiKey) {
       try {
-        const initResult = qwenAIService.init({
+        const initResult = aiChatService.init({
           apiKey,
           defaultModel: 'qwen-omni-turbo-2025-01-19',
           useCompatibleMode: true
@@ -649,7 +656,7 @@ const VideoUnderstanding = () => {
         setSubtitles(parsedSubtitles);
         
         // 设置字幕到服务
-        qwenAIService.setSubtitles(parsedSubtitles);
+        aiChatService.setSubtitles(parsedSubtitles);
         
         setMessage(`成功解析字幕文件: ${file.name}，共 ${parsedSubtitles.length} 条字幕`);
         
@@ -697,7 +704,7 @@ const VideoUnderstanding = () => {
     keyFrames.forEach(url => URL.revokeObjectURL(url));
     
     // 清除字幕和视频相关数据
-    qwenAIService.clearVideoData();
+    aiChatService.clearVideoData();
     setSubtitles([]);
     
     setVideoFile(null);
@@ -855,7 +862,7 @@ const VideoUnderstanding = () => {
     setInputImage(null);
     setInputImageB64(null);
   };
-
+  
   // 加载提示词设置
   useEffect(() => {
     const loadPromptSettings = () => {
@@ -1012,39 +1019,76 @@ const VideoUnderstanding = () => {
       
       console.log('系统提示:', enhancedSystemPrompt);
       
+      // 获取当前使用的服务名称
+      const serviceName = aiChatService.getCurrentServiceName();
+      const currentRound = aiChatService.getCurrentRound();
+      let modelName = '通义千问';
+      let statusText = '';
+      let activeModel = 'qwen-omni-turbo-2025-01-19'; // 默认通义千问的模型
+
+      if (serviceName === 'qwen') {
+        modelName = '通义千问';
+        activeModel = 'qwen-omni-turbo-2025-01-19'; // 通义千问使用Omni模型
+        // 在第0轮是正常的，但在非第0轮可能是因为火山方舟不可用
+        if (currentRound > 0 && !aiChatService._volcengineAvailable) {
+          statusText = '（火山方舟不可用）';
+        }
+      } else if (serviceName === 'volcengine') {
+        modelName = '火山方舟';
+        activeModel = 'ep-20250207170747-dm2jv'; // 火山方舟使用的模型
+      }
+      
+      setModelInfo(`${modelName}（第${currentRound + 1}轮对话）${statusText}`);
+      
       // 存储正在构建的响应
       let responseText = "";
       
       // 构建onChunk回调函数，直接更新消息内容
-      const onChunk = (chunk) => {
+      const onChunk = (chunk, context) => {
+        // 检查是否已完成或出错
+        if (context?.done || context?.error) {
+          console.log('流式响应已完成或出错:', context);
+          return;
+        }
+        
         if (chunk) {
-          // 更新正在构建的响应
-          responseText += chunk;
-          
-          // 更新消息列表
+          // 直接使用新的文本内容，避免累加造成重复
+          const newContent = context?.fullText || (responseText + chunk);
+
+          // 仅当内容变化时才更新状态
+          if (newContent !== responseText) {
+            responseText = newContent;
+            
+            // 使用函数形式的setState确保使用最新状态
             setMessages(prevMessages => {
-              return prevMessages.map(msg => {
-              if (msg.id === assistantTempMessage.id) {
-                  return {
-                  ...msg,
-                  content: responseText
-                  };
-                }
-                return msg;
-              });
+              // 查找临时消息
+              const messageIndex = prevMessages.findIndex(msg => msg.id === assistantTempMessage.id);
+              if (messageIndex === -1) return prevMessages;
+              
+              // 复制消息数组
+              const updatedMessages = [...prevMessages];
+              
+              // 只更新特定消息的内容
+              updatedMessages[messageIndex] = {
+                ...updatedMessages[messageIndex],
+                content: responseText
+              };
+              
+              return updatedMessages;
             });
-          
-          // 滚动到底部
-          messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+            
+            // 滚动到底部
+            messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+          }
         }
       };
       
       // 准备聊天选项
-              const chatOptions = {
-                model: 'qwen-omni-turbo-2025-01-19',
+      const chatOptions = {
+        model: activeModel, // 使用当前活跃的模型，而不是硬编码
         systemPrompt: enhancedSystemPrompt,
-                useHistory: true,
-                stream: true,
+        useHistory: true,
+        stream: true,
         onChunk: onChunk
       };
       
@@ -1056,12 +1100,12 @@ const VideoUnderstanding = () => {
       
       // 使用提取的关键帧进行视频理解
       if (keyFramesBase64 && keyFramesBase64.length > 0) {
-        const response = await qwenAIService.understandVideoFrames(
+        const response = await aiChatService.understandVideoFrames(
           keyFramesBase64,
-                enhancedUserInput,
-                chatOptions
-              );
-              
+          enhancedUserInput,
+          chatOptions
+        );
+        
         console.log('视频理解API响应:', response);
       } else {
         // 无关键帧时使用普通聊天
@@ -1069,16 +1113,16 @@ const VideoUnderstanding = () => {
           message: enhancedUserInput,
           systemPrompt: enhancedSystemPrompt,
           stream: true,
-          onChunk: 'function'
+          onChunk: '函数对象'
         });
         
-        const response = await qwenAIService.chat({
+        const response = await aiChatService.chat({
           message: enhancedUserInput,
           systemPrompt: enhancedSystemPrompt,
           useHistory: true,
           stream: true,
           onChunk: onChunk,
-          model: 'qwen-omni-turbo-2025-01-19'
+          model: activeModel // 使用当前活跃的模型，而不是硬编码
         });
         
         console.log('聊天API响应:', response);
@@ -1087,17 +1131,17 @@ const VideoUnderstanding = () => {
       console.error('发送消息失败:', error);
       
       // 显示错误信息
-              setMessages(prevMessages => {
-                return prevMessages.map(msg => {
+      setMessages(prevMessages => {
+        return prevMessages.map(msg => {
           if (msg.id === assistantTempMessage.id) {
-                    return {
+            return {
               ...msg,
               content: `出错了: ${error.message || '无法连接到AI服务，请重试'}`
-                    };
-                  }
-                  return msg;
-                });
-              });
+            };
+          }
+          return msg;
+        });
+      });
       
       setError(`发送消息失败: ${error.message || '未知错误'}`);
     } finally {
@@ -1289,23 +1333,17 @@ const VideoUnderstanding = () => {
                 reject(new Error('设置视频时间失败次数过多'));
               }
             } else {
-              // 暂停后再尝试
-              videoElement.pause();
+              // 跳到下一帧
+              currentIndex++;
               setTimeout(() => {
-                try {
-                  videoElement.currentTime = time;
-                } catch (e2) {
-                  console.error('再次设置视频时间失败:', e2);
-                  currentIndex++;
-                  if (currentIndex < timePoints.length) {
-                    captureFrame(timePoints[currentIndex]);
-                  } else if (frames.length >= MIN_FRAMES) {
-                    resolve({ frames, framesBase64 });
-                  } else {
-                    reject(new Error('无法提取足够的帧'));
-                  }
+                if (currentIndex < timePoints.length) {
+                  captureFrame(timePoints[currentIndex]);
+                } else if (frames.length > 0) {
+                  resolve({ frames, framesBase64 });
+                } else {
+                  reject(new Error('无法提取任何帧'));
                 }
-              }, 500);
+              }, 100);
             }
           }
         };
@@ -1370,8 +1408,8 @@ const VideoUnderstanding = () => {
                 resolve({ frames, framesBase64 });
               } else {
                 reject(new Error('处理视频帧失败次数过多'));
-        }
-      } else {
+              }
+            } else {
               // 跳到下一帧
               currentIndex++;
               setTimeout(() => {
@@ -1430,7 +1468,7 @@ const VideoUnderstanding = () => {
     
     // 添加系统消息
     setMessages(prev => [...prev, {
-              role: 'system',
+      role: 'system',
       content: `已选择 ${selectedFrames.length} 个关键帧用于分析，可以开始提问`
     }]);
   };
@@ -1764,7 +1802,43 @@ const VideoUnderstanding = () => {
         <div className="right-column">
           <div className="chat-container">
             <div className="chat-header">
-              <h3>视频问答区域</h3>
+              <h2>视频对话</h2>
+              <div className="model-selection">
+                <div className="model-info">{modelInfo}</div>
+                <button 
+                  className="model-switch-button" 
+                  onClick={() => {
+                    const newService = aiChatService.activeService === 'qwen' ? 'volcengine' : 'qwen';
+                    const success = aiChatService.setActiveService(newService);
+                    if (success) {
+                      // 更新模型信息显示
+                      const serviceName = aiChatService.getCurrentServiceName();
+                      const currentRound = aiChatService.getCurrentRound();
+                      let modelName = serviceName === 'qwen' ? '通义千问' : '火山方舟';
+                      let statusText = '';
+                      
+                      if (serviceName === 'qwen' && currentRound > 0 && !aiChatService._volcengineAvailable) {
+                        statusText = '（火山方舟不可用）';
+                      }
+                      
+                      setModelInfo(`${modelName}（手动切换）${statusText}`);
+                    } else if (newService === 'volcengine') {
+                      // 如果切换失败且目标是火山方舟，显示错误信息
+                      setError('无法切换到火山方舟，该服务不可用');
+                    }
+                  }}
+                  title="切换AI模型"
+                >
+                  切换到{aiChatService.activeService === 'qwen' ? '火山方舟' : '通义千问'}
+                </button>
+                <button 
+                  className="debug-toggle-button" 
+                  onClick={() => setShowDebugPanel(!showDebugPanel)}
+                  title="打开调试面板"
+                >
+                  {showDebugPanel ? '关闭调试' : '打开调试'}
+                </button>
+              </div>
             </div>
             <div className="chat-messages">
                   {messages.map((msg, index) => (
@@ -1870,6 +1944,12 @@ const VideoUnderstanding = () => {
           onSave={handleSavePromptSettings}
         />
       )}
+      
+      {/* 添加调试面板组件 */}
+      <DebugPanel 
+        isOpen={showDebugPanel} 
+        onClose={() => setShowDebugPanel(false)} 
+      />
     </div>
   );
 };
